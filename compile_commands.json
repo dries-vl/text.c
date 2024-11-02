@@ -1,0 +1,7 @@
+[
+{
+  "directory": "/mnt/c/users/dries/dev/text.c",
+  "command": "tcc main2.c -Iinclude -Llib",
+  "file": "/mnt/c/users/dries/dev/text.c/main2.c"
+}
+]

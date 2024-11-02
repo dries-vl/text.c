@@ -1,0 +1,14 @@
+compilers:
+  - description: TCC Compiler
+    match-compiler-exe: "(.*/)?tcc(.exe)?"
+    match-language: C
+    include-dirs:
+      - ${compiler-exe-dir}/include
+      - ${compiler-exe-dir}/include/sec_api
+      - ${compiler-exe-dir}/include/sys
+      - ${compiler-exe-dir}/include/winapi
+      - ${project-path}/include
+      - //wsl.localhost/Alpine/usr/include
+    defines-text: |
+      #define __TINYC__ 1
+      #define __STDC_VERSION__ 199901L
