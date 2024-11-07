@@ -16,12 +16,12 @@ struct wl_registry *registry = NULL; // Used to interact with the registry, whic
 struct wl_surface *first_surface = NULL; // Represents a drawable area (window) created by the compositor
 
 // Wayland subsurface
+struct wl_subcompositor *subcompositor = NULL;
 struct wl_surface *second_surface;
-struct wl_subsurface *subsurface;
+struct wl_subsurface *subsurface; // to set this surface as subsurface of the first surface (drawn over it)
 struct wl_buffer *cpu_buffer;
 void *buffer_data;
-struct wl_shm *shm = NULL;
-struct wl_subcompositor *subcompositor = NULL;
+struct wl_shm *shm = NULL; // shared memory
 
 // XDG state
 struct xdg_surface *xdg_surface = NULL; // Wraps a wl_surface with XDG-specific functionality
@@ -91,15 +91,16 @@ int main(int argc, char **argv) {
         wl_display_disconnect(display);
         return -1;
     }
+    if (create_cpu_subsurface() != 0)
+    {
+        fprintf(stderr, "Failed to create subsurface\n");
+        return -1;
+    }
+
     xdg_surface = xdg_wm_base_get_xdg_surface(wm_base, first_surface);
     if (xdg_surface == NULL) {
         fprintf(stderr, "Failed to get xdg_surface\n");
         wl_display_disconnect(display);
-        return -1;
-    }
-
-    if (create_cpu_subsurface() != 0)
-    {
         return -1;
     }
 
@@ -112,8 +113,8 @@ int main(int argc, char **argv) {
     }
     xdg_toplevel_add_listener(window, &toplevel_listener, NULL);
     xdg_toplevel_set_title(window, "OpenGL ES Triangle");
+    // initial commit of parent surface, needed to kick off rendering loop somehow
     wl_surface_commit(first_surface);
-    wl_display_roundtrip(display); // make sure the surface is configured
     // event loop that listens to events like mouseclicks, keyboard, resize, ...
     while (running && wl_display_dispatch(display) != -1) {
         // The event loop processes Wayland events and keeps the application responsive

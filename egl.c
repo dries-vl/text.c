@@ -233,7 +233,9 @@ void draw_egl() {
         print_egl_error("Failed to swap buffers");
     }
 
-    // Request the next frame callback
+    // -IMPORTANT FUNCTION: render loop is created here
+    // TODO: subsurface gets updated here with this callback
+    // callback that hands over control for when next frame is drawn, and then the other callback is called
     struct wl_callback *callback = wl_surface_frame(first_surface);
     wl_callback_add_listener(callback, &frame_listener, NULL);
 
