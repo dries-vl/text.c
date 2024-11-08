@@ -7,7 +7,10 @@
 #include <string.h>
 #include <stdbool.h>
 #include <time.h>
+#include <linux/input-event-codes.h>
+
 #include "xdg-shell-client-protocol.h"
+#include "viewporter-client-protocol.h"
 
 static struct wl_display *display;
 static struct wl_compositor *compositor;
@@ -17,6 +20,11 @@ static struct wl_buffer *buffer;
 static struct xdg_wm_base *xdg_wm_base;
 static struct xdg_surface *xdg_surface;
 static struct xdg_toplevel *xdg_toplevel;
+static struct wp_viewporter *viewporter;
+static struct wp_viewport *viewport;
+static struct wl_seat *seat;
+struct wl_pointer *pointer;
+
 static volatile uint32_t *frame_buffer;
 static int width = 100;
 static int height = 100;
@@ -26,17 +34,66 @@ static bool configured = false;
 static void xdg_toplevel_configure(void *data, struct xdg_toplevel *xdg_toplevel,
                                  int32_t w, int32_t h, struct wl_array *states)
 {
-    // Handle window size changes if needed
-    if (w > 0 && h > 0) {
-        width = w;
-        height = h;
+    if (w > 0 && h > 0 && viewport) {
+        wp_viewport_set_destination(viewport, w, h);
     }
 }
+
+static void pointer_enter(void *data, struct wl_pointer *pointer,
+                         uint32_t serial, struct wl_surface *surface,
+                         wl_fixed_t sx, wl_fixed_t sy) {
+    // Cursor enters the surface
+}
+
+static void pointer_leave(void *data, struct wl_pointer *pointer,
+                         uint32_t serial, struct wl_surface *surface) {
+    // Cursor leaves the surface
+}
+
+static void pointer_motion(void *data, struct wl_pointer *pointer,
+                         uint32_t time, wl_fixed_t sx, wl_fixed_t sy) {
+    // Mouse movement
+}
+
+static void pointer_button(void *data, struct wl_pointer *pointer, uint32_t serial,
+                         uint32_t time, uint32_t button, uint32_t state) {
+    if (button == BTN_LEFT && state == WL_POINTER_BUTTON_STATE_PRESSED) {
+        xdg_toplevel_move(xdg_toplevel, seat, serial);
+    }
+    else if (button == BTN_RIGHT && state == WL_POINTER_BUTTON_STATE_PRESSED) {
+        xdg_toplevel_resize(xdg_toplevel, seat, serial, XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM_RIGHT);
+    }
+}
+
+static void pointer_axis(void *data, struct wl_pointer *pointer,
+                        uint32_t time, uint32_t axis, wl_fixed_t value) {
+    // Scroll wheel
+}
+
+static const struct wl_pointer_listener pointer_listener = {
+    .enter = pointer_enter,
+    .leave = pointer_leave,
+    .motion = pointer_motion,
+    .button = pointer_button,
+    .axis = pointer_axis,
+};
+
+static void seat_capabilities(void *data, struct wl_seat *wl_seat,
+                            uint32_t capabilities) {
+    if (capabilities & WL_SEAT_CAPABILITY_POINTER) {
+        pointer = wl_seat_get_pointer(wl_seat);
+        wl_pointer_add_listener(pointer, &pointer_listener, NULL);
+    }
+}
+
+static const struct wl_seat_listener seat_listener = {
+    .capabilities = seat_capabilities,
+};
+
 
 static void xdg_toplevel_close(void *data, struct xdg_toplevel *xdg_toplevel) {
     running = false;
 }
-
 static const struct xdg_toplevel_listener toplevel_listener = {
     .configure = xdg_toplevel_configure,
     .close = xdg_toplevel_close,
@@ -46,7 +103,6 @@ static void xdg_wm_base_ping(void *data, struct xdg_wm_base *shell, uint32_t ser
 {
     xdg_wm_base_pong(shell, serial);
 }
-
 static const struct xdg_wm_base_listener shell_listener = {
     .ping = xdg_wm_base_ping,
 };
@@ -61,7 +117,6 @@ static void xdg_surface_configure(void *data, struct xdg_surface *xdg_surface, u
         configured = true;
     }
 }
-
 static const struct xdg_surface_listener xdg_surface_listener = {
     .configure = xdg_surface_configure,
 };
@@ -69,7 +124,12 @@ static const struct xdg_surface_listener xdg_surface_listener = {
 static void registry_handle_global(void *data, struct wl_registry *registry,
                           uint32_t name, const char *interface, uint32_t version)
 {
-    if (strcmp(interface, wl_compositor_interface.name) == 0) {
+    if (strcmp(interface, wl_seat_interface.name) == 0) {
+        seat = wl_registry_bind(registry, name, &wl_seat_interface, 1);
+        wl_seat_add_listener(seat, &seat_listener, NULL);
+    } else if (strcmp(interface, wp_viewporter_interface.name) == 0) {
+        viewporter = wl_registry_bind(registry, name, &wp_viewporter_interface, 1);
+    } else if (strcmp(interface, wl_compositor_interface.name) == 0) {
         compositor = wl_registry_bind(registry, name, &wl_compositor_interface, 1);
     } else if (strcmp(interface, wl_shm_interface.name) == 0) {
         shm = wl_registry_bind(registry, name, &wl_shm_interface, 1);
@@ -94,14 +154,17 @@ int main() {
     struct wl_registry *registry = wl_display_get_registry(display);
     wl_registry_add_listener(registry, &registry_listener, NULL);
     wl_display_roundtrip(display);
+    wl_display_roundtrip(display); // second round-trip
 
-    // Create surface
     surface = wl_compositor_create_surface(compositor);
     xdg_surface = xdg_wm_base_get_xdg_surface(xdg_wm_base, surface);
     xdg_surface_add_listener(xdg_surface, &xdg_surface_listener, NULL);
     xdg_toplevel = xdg_surface_get_toplevel(xdg_surface);
     xdg_toplevel_add_listener(xdg_toplevel, &toplevel_listener, NULL);
+    viewport = wp_viewporter_get_viewport(viewporter, surface);
+
     xdg_toplevel_set_app_id(xdg_toplevel, "MAIN2.C");
+    xdg_toplevel_set_title(xdg_toplevel, "MAIN2.C");
 
     // use shared buffer for direct writes to wayland frame buffer
     const int stride = width * 4; // 4 bytes, RGBA
