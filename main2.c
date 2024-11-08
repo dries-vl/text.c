@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
+#include <stdlib.h>
 #include <time.h>
 #include <linux/input-event-codes.h>
 
@@ -31,8 +32,49 @@ static int height = 100;
 static bool running = true;
 static bool configured = false;
 
+// todo: maybe move to helper/util.h
+static uint64_t get_time_ns(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC_RAW, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000 + ts.tv_nsec;
+}
+
+static inline void draw_to_buffer(uint32_t color) {
+    // draw to the buffer, a simple loop to simulate some drawing logic, needs not be optimal
+    for (int i = 0; i < width * height; i++) {
+        frame_buffer[i] = color;
+    }
+}
+
+// frame callback to measure timing of frame
+static void frame_callback(void *data, struct wl_callback *callback, uint32_t presentation_time) {
+    const uint64_t submit_time = (uintptr_t) data;
+    const uint64_t finish_time = get_time_ns();
+    printf("Input-to-display latency: %lu microseconds\n", (finish_time - submit_time) / 1000);
+    wl_callback_destroy(callback);
+}
+static const struct wl_callback_listener frame_listener = {
+    .done = frame_callback,
+};
+
+static void draw_new_buffer(void)
+{
+    // draw into frame buffer + measure timing
+    uint64_t start_time = get_time_ns();
+    draw_to_buffer(0xFF000000 | time(NULL) * 1000);
+    wl_surface_damage(surface, 0, 0, width, height);
+    uint64_t finish_time = get_time_ns();
+    // printf("Input-to-buffer latency: %lu microseconds\n", (finish_time - start_time) / 1000);
+
+    // commit changes + add callback to measure timing
+    struct wl_callback *callback = wl_surface_frame(surface);
+    wl_callback_add_listener(callback, &frame_listener, (void *) finish_time);
+    wl_surface_commit(surface);
+    wl_display_flush(display);
+}
+
 static void xdg_toplevel_configure(void *data, struct xdg_toplevel *xdg_toplevel,
-                                 int32_t w, int32_t h, struct wl_array *states)
+                                   int32_t w, int32_t h, struct wl_array *states)
 {
     if (w > 0 && h > 0 && viewport) {
         wp_viewport_set_destination(viewport, w, h);
@@ -40,21 +82,30 @@ static void xdg_toplevel_configure(void *data, struct xdg_toplevel *xdg_toplevel
 }
 
 static void pointer_enter(void *data, struct wl_pointer *pointer,
-                         uint32_t serial, struct wl_surface *surface,
-                         wl_fixed_t sx, wl_fixed_t sy) {
+                          uint32_t serial, struct wl_surface *surface,
+                          wl_fixed_t sx, wl_fixed_t sy) {
     // Cursor enters the surface
 }
 
 static void pointer_leave(void *data, struct wl_pointer *pointer,
-                         uint32_t serial, struct wl_surface *surface) {
+                          uint32_t serial, struct wl_surface *surface) {
     // Cursor leaves the surface
 }
 
 static void pointer_motion(void *data, struct wl_pointer *pointer,
-                         uint32_t time, wl_fixed_t sx, wl_fixed_t sy) {
+                           uint32_t time, wl_fixed_t sx, wl_fixed_t sy) {
     // Mouse movement
+    draw_new_buffer();
 }
 
+static void pointer_button(void *data, struct wl_pointer *pointer, uint32_t serial,
+                           uint32_t time, uint32_t button, uint32_t state) {
+    if (button == BTN_LEFT && state == WL_POINTER_BUTTON_STATE_PRESSED) {
+        draw_new_buffer();
+    }
+}
+
+/* // - dragging and resizing the window;
 static void pointer_button(void *data, struct wl_pointer *pointer, uint32_t serial,
                          uint32_t time, uint32_t button, uint32_t state) {
     if (button == BTN_LEFT && state == WL_POINTER_BUTTON_STATE_PRESSED) {
@@ -64,6 +115,7 @@ static void pointer_button(void *data, struct wl_pointer *pointer, uint32_t seri
         xdg_toplevel_resize(xdg_toplevel, seat, serial, XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM_RIGHT);
     }
 }
+*/
 
 static void pointer_axis(void *data, struct wl_pointer *pointer,
                         uint32_t time, uint32_t axis, wl_fixed_t value) {
@@ -89,7 +141,6 @@ static void seat_capabilities(void *data, struct wl_seat *wl_seat,
 static const struct wl_seat_listener seat_listener = {
     .capabilities = seat_capabilities,
 };
-
 
 static void xdg_toplevel_close(void *data, struct xdg_toplevel *xdg_toplevel) {
     running = false;
@@ -142,13 +193,6 @@ static const struct wl_registry_listener registry_listener = {
     .global = registry_handle_global,
 };
 
-static inline void draw_to_buffer(uint32_t color) {
-    // draw to the buffer, a simple loop to simulate some drawing logic, needs not be optimal
-    for (int i = 0; i < width * height; i++) {
-        frame_buffer[i] = color;
-    }
-}
-
 int main() {
     display = wl_display_connect(NULL);
     struct wl_registry *registry = wl_display_get_registry(display);
@@ -184,20 +228,8 @@ int main() {
     // Wait for the first configure event
     wl_display_roundtrip(display);
 
+    // loop gets triggered for every execution of a callback_add_listener (that has not been destroyed)
     while (running && wl_display_dispatch(display) != -1) {
-        // Just handle events
-        struct timespec start, end;
-        clock_gettime(CLOCK_MONOTONIC, &start);
-        draw_to_buffer(0xFF000000 | (time(NULL) * 1000));
-        // need to tell Wayland about the update
-        // (happens without too it seems, but implicitly by compositor reacting to event too, unreliable/latency?)
-        wl_surface_damage(surface, 0, 0, width, height);
-        wl_surface_commit(surface);
-        wl_display_flush(display);  // ensure changes are sent to compositor immediately
-        clock_gettime(CLOCK_MONOTONIC, &end);
-        long elapsed_ns = (end.tv_sec - start.tv_sec) * 1000000000 +
-                         (end.tv_nsec - start.tv_nsec);
-        printf("Elapsed time: %ld\n", elapsed_ns);
     }
     return 0;
 }
